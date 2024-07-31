@@ -473,4 +473,3 @@ const CandidateInterview = () => {
 };
 
 export default CandidateInterview;
-
