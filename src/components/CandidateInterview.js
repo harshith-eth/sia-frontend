@@ -1,10 +1,11 @@
-
-import React, { useEffect, useRef, useState } from 'react';
-import { Box, Flex, IconButton, Text, HStack, Button, VStack, useColorModeValue, Menu, MenuButton, MenuList, MenuItem, AlertDialog, AlertDialogOverlay, AlertDialogContent, AlertDialogHeader, AlertDialogBody, AlertDialogFooter, Input } from '@chakra-ui/react';
-import { FaMicrophone, FaMicrophoneSlash, FaVideo, FaVideoSlash, FaPhoneSlash, FaChevronUp, FaPaperPlane, FaFileUpload } from 'react-icons/fa';
-import { motion } from 'framer-motion';
-import Webcam from 'react-webcam';
-import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
+import React, { useState, useEffect, useRef } from 'react';
+import { Box, Flex, useColorModeValue, AlertDialog, AlertDialogBody, AlertDialogFooter, AlertDialogHeader, AlertDialogContent, AlertDialogOverlay, Button } from '@chakra-ui/react';
+import VideoSection from './VideoSection';
+import Chatbot from './Chatbot';
+import InterviewControls from './InterviewControls';
+import { useTTS } from './TTS';
+import { useSTT } from './STT';
+import useWebSocketCommunication from './WebSocketCommunication';
 
 const CandidateInterview = () => {
   const [stream, setStream] = useState(null);
@@ -19,55 +20,15 @@ const CandidateInterview = () => {
   const [selectedAudioDevice, setSelectedAudioDevice] = useState('');
   const [selectedVideoDevice, setSelectedVideoDevice] = useState('');
   const [conversationHistory, setConversationHistory] = useState([]);
-  const recognizerRef = useRef(null);
-  const synthesizerRef = useRef(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const lastRecognizedText = useRef('');
-  const recognitionTimeout = useRef(null);
   const [isEndCallDialogOpen, setIsEndCallDialogOpen] = useState(false);
-  const cancelRef = useRef();
-
+  
   const userVideo = useRef();
-  const ws = useRef(null);
-  const chatBoxRef = useRef(null); // Add this ref for the chat box
-
-  // Add these two functions here
-  const disableRecognizer = () => {
-    if (recognizerRef.current) {
-      recognizerRef.current.stopContinuousRecognitionAsync();
-      console.log("STT: Recognizer disabled.");
-    }
-  };
-
-  const enableRecognizer = () => {
-    if (recognizerRef.current && !isSpeaking) {
-      recognizerRef.current.startContinuousRecognitionAsync();
-      console.log("STT: Recognizer enabled.");
-    }
-  };
-
-  const connectWebSocket = () => {
-    ws.current = new WebSocket('ws://localhost:80/');
-    ws.current.onopen = () => console.log('WebSocket connected');
-    ws.current.onmessage = (message) => {
-      console.log('Raw message:', message);
-      try {
-        const data = JSON.parse(message.data);
-        if (data.type === 'interviewResponse') {
-          setMessages(prev => [...prev, { from: 'SIA', text: data.message }]);
-          setConversationHistory(prev => [...prev, { role: 'assistant', content: data.message }]);
-          textToSpeech(data.message);
-        }
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
-      }
-    };
-    ws.current.onerror = (error) => console.error('WebSocket error:', error);
-    ws.current.onclose = () => {
-      console.log('WebSocket closed. Reconnecting...');
-      setTimeout(connectWebSocket, 3000);
-    };
-  };
+  const cancelRef = useRef();
+  
+  const { textToSpeech } = useTTS();
+  const { continuousSpeechToText, stopListening } = useSTT();
+  const { sendMessage, lastMessage } = useWebSocketCommunication('ws://localhost:80/');
 
   useEffect(() => {
     navigator.mediaDevices.enumerateDevices().then(devices => {
@@ -78,26 +39,18 @@ const CandidateInterview = () => {
     });
 
     getUserMedia();
-    connectWebSocket();
-
-    return () => {
-      if (ws.current) {
-        ws.current.close();
-      }
-      if (recognizerRef.current) {
-        recognizerRef.current.close();
-      }
-      if (synthesizerRef.current) {
-        synthesizerRef.current.close();
-      }
-    };
   }, [selectedAudioDevice, selectedVideoDevice]);
 
   useEffect(() => {
-    if (chatBoxRef.current) {
-      chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight; // Auto-scroll to the latest message
+    if (lastMessage) {
+      const data = JSON.parse(lastMessage);
+      if (data.type === 'interviewResponse') {
+        setMessages(prev => [...prev, { from: 'SIA', text: data.message }]);
+        setConversationHistory(prev => [...prev, { role: 'assistant', content: data.message }]);
+        textToSpeech(data.message);
+      }
     }
-  }, [messages, currentMessage]); // Trigger on messages or currentMessage change
+  }, [lastMessage]);
 
   const getUserMedia = () => {
     navigator.mediaDevices.getUserMedia({
@@ -107,7 +60,7 @@ const CandidateInterview = () => {
       setStream(stream);
       if (userVideo.current) {
         userVideo.current.srcObject = stream;
-        userVideo.current.muted = true; // Mute the video element to prevent echo
+        userVideo.current.muted = true;
       }
     }).catch(error => {
       console.error('Error accessing media devices:', error);
@@ -128,25 +81,23 @@ const CandidateInterview = () => {
     }
   };
 
+  const handleRecognizedSpeech = (text) => {
+    setMessages(prev => [...prev, { from: 'User', text }]);
+    setConversationHistory(prev => [...prev, { role: 'user', content: text }]);
+    sendMessage(JSON.stringify({ type: 'interviewQuestion', question: text, history: conversationHistory }));
+  };
+
   const startInterview = () => {
-    if (!isInterviewStarted && ws.current) {
-      console.log('Starting interview');
+    if (!isInterviewStarted) {
       setIsInterviewStarted(true);
-      ws.current.send(JSON.stringify({ type: 'startInterview' }));
+      sendMessage(JSON.stringify({ type: 'startInterview' }));
 
-      const welcomeMessage = "Hey, I am SIA. This will be a short intro call with you to get to know about yourself. Be free and relax. I understand that this might be new to you - conversing with AI - but I really hope to understand you and share your story with the hiring team. Let's make this an enjoyable experience!";
+      const welcomeMessage = "Hey, I am Sia - Smart Interview Assistant. This will be a short intro call with you to get to know about yourself. Be free and relax. I understand that this might be new to you - conversing with AI - but I really hope to understand you and share your story with the hiring team. Let's make this an enjoyable experience!";
 
-      typeMessage(welcomeMessage, (typedMessage) => {
-        setCurrentMessage(typedMessage);
-        if (typedMessage === welcomeMessage) {
-          setMessages(prev => [...prev, { from: 'SIA', text: welcomeMessage }]);
-          setCurrentMessage('');
-        }
-      });
-
+      setMessages(prev => [...prev, { from: 'SIA', text: welcomeMessage }]);
       setConversationHistory([{ role: 'assistant', content: welcomeMessage }]);
       textToSpeech(welcomeMessage);
-      continuousSpeechToText();
+      continuousSpeechToText(handleRecognizedSpeech);
     }
   };
 
@@ -156,293 +107,44 @@ const CandidateInterview = () => {
 
   const handleEndInterview = () => {
     setIsEndCallDialogOpen(false);
-    console.log('Ending interview');
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
     }
-    if (ws.current) {
-      ws.current.close();
-    }
-    if (recognizerRef.current) {
-      recognizerRef.current.close();
-    }
-
-    // Stop the TTS
-    if (synthesizerRef.current) {
-      synthesizerRef.current.close();
-    }
-
-    // Clear the current message being typed
-    setCurrentMessage('');
-
+    stopListening();
     setIsInterviewStarted(false);
   };
 
-  // Find the existing `textToSpeech` function
-  const textToSpeech = (text) => {
-    disableRecognizer(); // Disable recognizer before starting TTS
-
-    // Stop any ongoing TTS
-    if (synthesizerRef.current) {
-      synthesizerRef.current.close();
-    }
-
-    setIsSpeaking(true);
-    const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(process.env.REACT_APP_AZURE_SPEECH_KEY, process.env.REACT_APP_AZURE_SPEECH_REGION);
-    const audioConfig = SpeechSDK.AudioConfig.fromDefaultSpeakerOutput();
-    const synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig, audioConfig);
-    synthesizerRef.current = synthesizer; // Store synthesizer reference for later interruption
-
-    synthesizer.speakTextAsync(text,
-      result => {
-        if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-          console.log("TTS: Synthesis finished.");
-        } else {
-          console.error("TTS: Speech synthesis canceled, " + result.errorDetails);
-        }
-        synthesizer.close();
-        synthesizerRef.current = null; // Clear synthesizer reference
-        setIsSpeaking(false);
-        setIsProcessing(false);
-        enableRecognizer(); // Enable recognizer after TTS completes
-      },
-      error => {
-        console.error("TTS: Error synthesizing speech: " + error);
-        synthesizer.close();
-        synthesizerRef.current = null; // Clear synthesizer reference
-        setIsSpeaking(false);
-        setIsProcessing(false);
-        enableRecognizer(); // Enable recognizer after TTS completes
-      });
-  };
-
-  // Find the existing `continuousSpeechToText` function
-  const continuousSpeechToText = () => {
-    const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(process.env.REACT_APP_AZURE_SPEECH_KEY, process.env.REACT_APP_AZURE_SPEECH_REGION);
-    const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
-    const recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
-
-    recognizerRef.current = recognizer;
-
-    recognizer.recognizing = (s, e) => {
-      if (!isSpeaking) { // Add this check
-        console.log(`STT: Recognizing: ${e.result.text}`);
-      }
-    };
-
-    recognizer.recognized = (s, e) => {
-      if (!isSpeaking && e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) { // Add this check
-        console.log(`STT: Recognized: ${e.result.text}`);
-        const currentText = e.result.text.trim();
-
-        if (currentText !== lastRecognizedText.current && currentText !== '') {
-          clearTimeout(recognitionTimeout.current);
-
-          recognitionTimeout.current = setTimeout(() => {
-            setMessages(prev => [...prev, { from: 'User', text: currentText }]);
-            if (!isProcessing) {
-              setIsProcessing(true);
-              console.log("Sending recognition");
-              ws.current.send(JSON.stringify({ type: 'interviewQuestion', question: currentText, history: conversationHistory }));
-              setConversationHistory(prev => [...prev, { role: 'user', content: currentText }]);
-            }
-            lastRecognizedText.current = currentText;
-          }, 1000); // Wait for 1 second before processing
-        }
-      } else if (e.result.reason === SpeechSDK.ResultReason.NoMatch) {
-        console.log("STT: No speech could be recognized.");
-      }
-    };
-
-    recognizer.canceled = (s, e) => {
-      console.error(`STT Canceled. Reason: ${e.reason}`, e.errorDetails);
-      recognizer.stopContinuousRecognitionAsync();
-    };
-
-    recognizer.sessionStopped = (s, e) => {
-      console.log("STT: Session stopped.");
-      recognizer.stopContinuousRecognitionAsync();
-    };
-
-    recognizer.startContinuousRecognitionAsync();
-  };
-
-  const typeMessage = (message, callback) => {
-    let index = 0;
-    const typingSpeed = 40;
-
-    const type = () => {
-      if (index < message.length) {
-        callback(message.slice(0, index + 1));
-        index++;
-        setTimeout(type, typingSpeed);
-      }
-    };
-
-    type();
-  };
-
-  const handleSendMessage = () => {
-    if (ws.current && currentMessage.trim() !== '') {
-      ws.current.send(JSON.stringify({ type: 'interviewQuestion', question: currentMessage.trim(), history: conversationHistory }));
-      setMessages(prev => [...prev, { from: 'User', text: currentMessage.trim() }]);
-      setConversationHistory(prev => [...prev, { role: 'user', content: currentMessage.trim() }]);
-      setCurrentMessage('');
-    }
-  };
-
-  const handleFileUpload = (event) => {
-    const file = event.target.files[0];
-    if (file && ws.current) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64File = reader.result.split(',')[1];
-        ws.current.send(JSON.stringify({ type: 'fileUpload', fileName: file.name, fileContent: base64File }));
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
   const bgColor = useColorModeValue('gray.800', 'gray.800');
-  const videoBgColor = useColorModeValue('gray.700', 'gray.700');
 
   return (
     <Box p={2} width="100vw" height="100vh" bg={bgColor}>
       <Flex direction="column" align="center" justify="space-between" height="100%" gap={5}>
         <Flex direction="row" align="center" justify="center" height="80%" gap={5} width="100%">
-          <Box
-            width="20%"
-            height="60%"
-            bg={videoBgColor}
-            borderRadius="md"
-            display="flex"
-            alignItems="center"
-            justifyContent="center"
-            overflow="hidden"
-            position="relative"
-          >
-            <Flex
-              direction="column"
-              align="center"
-              justify="center"
-              width="100%"
-              height="100%"
-              p={2}
-              bg="transparent"
-              borderRadius="md"
-              className={isSpeaking ? 'glow' : ''}
-            >
-              <motion.div
-                initial={{ scale: 1, opacity: 1 }}
-                animate={isSpeaking ? { scale: [1, 1.2, 1], opacity: [1, 0.5, 1] } : { scale: 1, opacity: 1 }}
-                transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
-                style={{
-                  position: "absolute",
-                  width: "150px",
-                  height: "150px",
-                  borderRadius: "50%",
-                  background: "radial-gradient(circle, rgba(85, 85, 255, 1) 0%, rgba(85, 85, 255, 0) 70%)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <Text fontSize="4xl" fontWeight="bold" color="white">SIA</Text>
-              </motion.div>
-            </Flex>
-          </Box>
-          <Box
-            width="46%"
-            height="79%"
-            bg={videoBgColor}
-            borderRadius="md"
-            display="flex"
-            alignItems="center"
-            justifyContent="center"
-            overflow="hidden"
-          >
-            <Webcam audio={false} ref={userVideo} style={{ width: '100%', height: '100%', transform: 'scaleX(-1)' }} />
-          </Box>
-          <Flex
-            direction="column"
-            width="30%"
-            height="79%"
-            bg={videoBgColor}
-            borderRadius="md"
-            p={3}
-          >
-            <Text fontSize="lg" fontWeight="bold" mb={2} position="sticky" top={0} bg={videoBgColor} zIndex={1}>Chat</Text> {/* Make the "Chat" heading sticky */}
-            <VStack spacing={3} align="stretch" overflowY="auto" ref={chatBoxRef} flex="1">
-              {messages.map((msg, index) => (
-                <Box
-                  key={index}
-                  bg={msg.from === 'SIA' ? 'blue.500' : 'gray.500'}
-                  color="white"
-                  p={2}
-                  borderRadius="md"
-                  alignSelf={msg.from === 'SIA' ? 'flex-start' : 'flex-end'}
-                >
-                  <Text>{msg.text}</Text>
-                </Box>
-              ))}
-              {currentMessage && (
-                <Box
-                  bg='blue.500'
-                  color="white"
-                  p={2}
-                  borderRadius="md"
-                  alignSelf='flex-start'
-                >
-                  <Text>{currentMessage}</Text>
-                </Box>
-              )}
-            </VStack>
-            <HStack spacing={2} mt={2}>
-              <Input
-                placeholder="Type your message here..."
-                value={currentMessage}
-                onChange={(e) => setCurrentMessage(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-                color="white"
-              />
-              <IconButton icon={<FaPaperPlane />} onClick={handleSendMessage} colorScheme="blue" />
-              <IconButton as="label" icon={<FaFileUpload />} colorScheme="blue">
-                <input type="file" accept="application/pdf" hidden onChange={handleFileUpload} />
-              </IconButton>
-            </HStack>
-          </Flex>
+          <VideoSection
+            userVideo={userVideo}
+            isSpeaking={isSpeaking}
+          />
+          <Chatbot
+            messages={messages}
+            currentMessage={currentMessage}
+            setCurrentMessage={setCurrentMessage}
+            sendMessage={sendMessage}
+            conversationHistory={conversationHistory}
+          />
         </Flex>
-        <HStack spacing={4} mb={4}>
-          <Menu>
-            <MenuButton as={IconButton} icon={<FaChevronUp />}>
-              Microphone
-            </MenuButton>
-            <MenuList>
-              {audioDevices.map((device, index) => (
-                <MenuItem key={index} onClick={() => setSelectedAudioDevice(device.deviceId)}>
-                  {selectedAudioDevice === device.deviceId ? <b>{device.label || `Microphone ${index + 1}`}</b> : device.label || `Microphone ${index + 1}`}
-                </MenuItem>
-              ))}
-            </MenuList>
-          </Menu>
-          <IconButton icon={micEnabled ? <FaMicrophone /> : <FaMicrophoneSlash />} onClick={toggleMic} />
-          <Menu>
-            <MenuButton as={IconButton} icon={<FaChevronUp />}>
-              Camera
-            </MenuButton>
-            <MenuList>
-              {videoDevices.map((device, index) => (
-                <MenuItem key={index} onClick={() => setSelectedVideoDevice(device.deviceId)}>
-                  {selectedVideoDevice === device.deviceId ? <b>{device.label || `Camera ${index + 1}`}</b> : device.label || `Camera ${index + 1}`}
-                </MenuItem>
-              ))}
-            </MenuList>
-          </Menu>
-          <IconButton icon={camEnabled ? <FaVideo /> : <FaVideoSlash />} onClick={toggleCam} />
-          <Text color="white">Timer: 00:00</Text>
-          <Button colorScheme="blue" onClick={startInterview}>Start Interview</Button>
-          <IconButton icon={<FaPhoneSlash />} colorScheme="red" onClick={endCall} />
-        </HStack>
+        <InterviewControls
+          micEnabled={micEnabled}
+          camEnabled={camEnabled}
+          toggleMic={toggleMic}
+          toggleCam={toggleCam}
+          startInterview={startInterview}
+          endCall={endCall}
+          audioDevices={audioDevices}
+          videoDevices={videoDevices}
+          setSelectedAudioDevice={setSelectedAudioDevice}
+          setSelectedVideoDevice={setSelectedVideoDevice}
+          isInterviewStarted={isInterviewStarted}
+        />
       </Flex>
       <AlertDialog
         isOpen={isEndCallDialogOpen}
