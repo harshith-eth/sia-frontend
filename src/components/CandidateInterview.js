@@ -75,7 +75,7 @@ const CandidateInterview = () => {
 
   const { sendMessage, closeWebSocket, openWebSocket, isConnected } =
     useWebSocketCommunication(
-      'wwss://13.60.249.210:443/',
+      'wss://13.60.249.210:443/',
       handleWebSocketMessage,
       () => {
         if (!isListening && isInterviewStarted) {
