@@ -1,11 +1,13 @@
+// VideoSection.js
 import React from 'react';
-import { Box, Flex, Text } from '@chakra-ui/react';
-import { motion } from 'framer-motion';
+import { Box, Flex } from '@chakra-ui/react';
 import Webcam from 'react-webcam';
+import SiaAnimation from './SiaAnimation';  // Import the SiaAnimation component
 
-const VideoSection = ({ userVideo, isSpeaking }) => {
+const VideoSection = ({ userVideo, isSpeaking, isInterviewStarted }) => {
   return (
     <>
+      {/* SIA Left Box */}
       <Box
         width="20%"
         height="60%"
@@ -26,27 +28,13 @@ const VideoSection = ({ userVideo, isSpeaking }) => {
           p={2}
           bg="transparent"
           borderRadius="md"
-          className={isSpeaking ? 'glow' : ''}
         >
-          <motion.div
-            initial={{ scale: 1, opacity: 1 }}
-            animate={isSpeaking ? { scale: [1, 1.2, 1], opacity: [1, 0.5, 1] } : { scale: 1, opacity: 1 }}
-            transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
-            style={{
-              position: "absolute",
-              width: "150px",
-              height: "150px",
-              borderRadius: "50%",
-              background: "radial-gradient(circle, rgba(85, 85, 255, 1) 0%, rgba(85, 85, 255, 0) 70%)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Text fontSize="4xl" fontWeight="bold" color="white">SIA</Text>
-          </motion.div>
+          {/* All animation and text are handled by SiaAnimation now */}
+          <SiaAnimation isSpeaking={isSpeaking} />
         </Flex>
       </Box>
+
+      {/* Video Middle Box */}
       <Box
         width="46%"
         height="79%"
@@ -56,8 +44,30 @@ const VideoSection = ({ userVideo, isSpeaking }) => {
         alignItems="center"
         justifyContent="center"
         overflow="hidden"
+        position="relative"
       >
         <Webcam audio={false} ref={userVideo} style={{ width: '100%', height: '100%', transform: 'scaleX(-1)' }} />
+
+        {isInterviewStarted && (
+          <Flex
+            position="absolute"
+            top="10px"
+            right="10px"
+            alignItems="center"
+            bg="rgba(255, 0, 0, 0.7)"
+            borderRadius="md"
+            padding="5px 10px"
+          >
+            <Box
+              width="8px"
+              height="8px"
+              borderRadius="50%"
+              bg="red.500"
+              marginRight="5px"
+            />
+            <span style={{ fontSize: '12px', fontWeight: 'bold', color: 'white' }}>Recording</span>
+          </Flex>
+        )}
       </Box>
     </>
   );
